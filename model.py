@@ -8,6 +8,7 @@ class MusicRNN(nn.Module):
         self.num_layers = num_layers
         # LSTM layer
         # Vielleicht ein GRU = Gated Recurrent Network?
+        #self.lstm = nn.GRU(input_size,hidden_size,num_layers,batch_first=True)
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
         # Fully connected layer
         self.fc = nn.Linear(hidden_size, output_size)

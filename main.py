@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-
+import constants
 from midi_dataset import MidiDataset
 from model import MusicRNN
 
@@ -21,7 +21,8 @@ print("Using device:", device)
 # ----------------------------------------------------------
 # 2) Dataset & DataLoader
 # ----------------------------------------------------------
-dataset = MidiDataset(folder_path="data/raw/lofi", seq_length=16)
+dataset = MidiDataset(folder_path="data/folk_music/train", seq_length=constants.SEQUENCE_LENGTH)
+# batch size = anzahl an traings sequenzen (seq_length) pro batch
 train_loader = DataLoader(dataset, batch_size=32, shuffle=True)  # shuffle=True üblich beim Training
 
 if len(dataset) == 0:
@@ -31,7 +32,9 @@ if len(dataset) == 0:
 # ----------------------------------------------------------
 # 3) Modell instanzieren und auf Device schicken
 # ----------------------------------------------------------
-model = MusicRNN(input_size=128, hidden_size=256, output_size=128)
+model = MusicRNN(input_size=constants.MODEL_INPUT_SIZE,
+                 hidden_size=constants.MODEL_HIDDEN_SIZE,
+                 output_size=constants.MODEL_OUTPUT_SIZE)
 model.to(device)
 model.train()
 
@@ -47,20 +50,37 @@ for epoch in range(num_epochs):
     total_loss = 0.0
 
     for inputs, targets in train_loader:
-        # -> Daten auf das Device
-        inputs = inputs.to(device)
-        targets = targets.to(device)
+        inputs = inputs.to(device)  # (batch_size, seq_length, 256)
+        targets = targets.to(device)  # (batch_size, 256) (One-Hot)
 
+        # Hidden State
         batch_size = inputs.size(0)
-        # Hidden States
         hidden = model.init_hidden(batch_size)
-        h0, c0 = hidden[0].to(device), hidden[1].to(device)
-        hidden = (h0, c0)
+        hidden = (hidden[0].to(device), hidden[1].to(device))
 
-        # Forward
         outputs, hidden = model(inputs, hidden)
-        loss = criterion(outputs, targets)
+        # outputs -> (batch_size, 256)
 
+        # 1) Zerlegen in Pitch/Velocity-Logits
+        pitch_logits = outputs[:, :128]
+        velocity_logits = outputs[:, 128:256]
+        note_duration_logits = outputs[:, 256:272]
+
+        # 2) Targets in Indizes umwandeln
+        pitch_one_hot = targets[:, :128]
+        velocity_one_hot = targets[:, 128:256]
+        note_duration_one_hot = targets[:, 256:272]
+        pitch_target = torch.argmax(pitch_one_hot, dim=1)
+        velocity_target = torch.argmax(velocity_one_hot, dim=1)
+        note_duration_target = torch.argmax(note_duration_one_hot, dim=1)
+
+        # 3) Verluste berechnen
+        pitch_loss = criterion(pitch_logits, pitch_target)
+        velocity_loss = criterion(velocity_logits, velocity_target)
+        note_duration_loss = criterion(note_duration_logits, note_duration_target)
+        loss = pitch_loss + velocity_loss + note_duration_loss
+
+        # 4) Backprop
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -68,12 +88,11 @@ for epoch in range(num_epochs):
         total_loss += loss.item()
 
     avg_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0
-    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+    print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
     # ----------------------------------------------------------
     # 5) Speichere das trainierte Modell
     # ----------------------------------------------------------
     model_path = "final_model_lofi.pth"  # 1,7897 loss
     torch.save(model.state_dict(), model_path)
-
 
 print(f"Training abgeschlossen. Modell gespeichert unter: {model_path}")

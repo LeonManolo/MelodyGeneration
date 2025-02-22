@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import pretty_midi
+
+import constants
 from midi_dataset import MidiDataset  # zum Seed-Laden oder Notenformat
 from model import MusicRNN
 
@@ -18,10 +20,11 @@ print("Using device:", device)
 # ----------------------------------------------------------
 # 2) Modell laden
 # ----------------------------------------------------------
-model = MusicRNN(input_size=128, hidden_size=256, output_size=128)
+model = MusicRNN(input_size=constants.MODEL_INPUT_SIZE,
+                 hidden_size=constants.MODEL_HIDDEN_SIZE,
+                 output_size=constants.MODEL_OUTPUT_SIZE)
 print(model)
-exit(1)
-loaded_state_dict = torch.load("final_model_lofi.pth", map_location=device, weights_only=True)
+loaded_state_dict = torch.load("final_model_lofi.pth", map_location=device)
 model.load_state_dict(loaded_state_dict)
 model.to(device)
 model.eval()
@@ -57,11 +60,15 @@ def generate_notes(model, seed_sequence, num_notes=50):
     with torch.no_grad():
         for _ in range(num_notes):
             outputs, hidden = model(current_seq, hidden)  # (1,128)
-            predicted_idx = torch.argmax(outputs, dim=1).item()
+            predicted_pitch_idx = torch.argmax(outputs[:, :128], dim=1).item()
+            predicted_velocity_idx = torch.argmax(outputs[:, 128:256], dim=1).item()
+            predicted_note_duration_idx = torch.argmax(outputs[:, 256:272], dim=1).item()
 
             # One-hot
-            new_note = torch.zeros(128, dtype=torch.float32, device=device)
-            new_note[predicted_idx] = 1.0
+            new_note = torch.zeros(272, dtype=torch.float32, device=device)
+            new_note[predicted_pitch_idx] = 1.0
+            new_note[128 + predicted_velocity_idx] = 1.0
+            new_note[256 + predicted_note_duration_idx] = 1.0
 
             generated_notes.append(new_note.cpu())
 
@@ -74,19 +81,27 @@ def generate_notes(model, seed_sequence, num_notes=50):
 
 
 # Wandelt eine Liste von One-hot-Noten in ein MIDI-File. Jede Note bekommt feste Dauer 'note_duration'.
-def notes_to_midi(one_hot_notes, filename="generated.mid", note_duration=0.4):
+def notes_to_midi(one_hot_notes, filename="generated.mid"):
     pm = pretty_midi.PrettyMIDI()
     piano_program = pretty_midi.instrument_name_to_program("Acoustic Grand Piano")
     piano_track = pretty_midi.Instrument(program=piano_program)
 
     current_time = 0.0
-    # [[0,0,0,0,0,0.89,...,0,0], [0,0,0.55,0,0,0.89,...,0,0]]
     for one_hot_vec in one_hot_notes:
-        pitch_idx = torch.argmax(one_hot_vec).item()
+        pitch_one_hot_vec = one_hot_vec[:128]  # 256 values and the first 128 values represent the pitch
+        velocity_one_hot_vec = one_hot_vec[128:256]  # 256 values and the last 128 values represent the velocity
+        note_duration_one_hot_vec = one_hot_vec[256:272]  # 256 values and the last 128 values represent the velocity
+        pitch_idx = torch.argmax(pitch_one_hot_vec).item()
+        velocity_idx = torch.argmax(velocity_one_hot_vec).item()
+        note_duration_idx = torch.argmax(note_duration_one_hot_vec).item()
+
         # probabilities = torch.softmax(output, dim=1) # in softmax reinschauen, notiz: (Variation autoencoder in den Folien, das aufteilen anschauen)
         # pitch_idx = torch.multinomial(probabilities, 1).item()
+
+        note_duration = note_duration_idx * 0.125
+
         note = pretty_midi.Note(
-            velocity=64,
+            velocity=velocity_idx,
             pitch=pitch_idx,
             start=current_time,
             end=current_time + note_duration
@@ -103,24 +118,22 @@ def notes_to_midi(one_hot_notes, filename="generated.mid", note_duration=0.4):
 # 4) Seed-Sequenz laden & Noten generieren
 # ----------------------------------------------------------
 # TOdo: Einfach leeres Dataset anlegen, um ggf. an seeds zu kommen
-try:
-    dataset = MidiDataset(folder_path="data/raw", seq_length=16)
-    if len(dataset) == 0:
-        print("Warnung: Dataset leer. Keine Seeds verfügbar.")
-        # Evtl. einfach Zufalls-Seed generieren oder beenden
-        # Hier beenden wir für's Beispiel.
-        exit(0)
-    else:
-        #seed_x, _ = dataset[1]  # shape (16,128)
-        # Generiere 50 neue Noten
 
-        # custom
-        one_hot_map = MidiDataset.pitch_to_one_hot()
-        custom_notes = [57, 60, 53, 62, 55, 58, 52, 50, 62, 58, 60, 57, 55, 53, 52, 50]
-        seed_x_2 = [one_hot_map[pitch] for pitch in custom_notes]
-        generated = generate_notes(model, seed_x_2, num_notes=100)
-        notes_to_midi(generated, filename="my_new_song_2.midi", note_duration=0.5)
 
-except Exception as e:
-    print("Fehler beim Laden des Seeds:", e)
-    print("Generiere kein neues MIDI.")
+dataset = MidiDataset(folder_path="data/folk_music/test", seq_length=16)
+if len(dataset) == 0:
+    print("Warnung: Dataset leer. Keine Seeds verfügbar.")
+    # Evtl. einfach Zufalls-Seed generieren oder beenden
+    # Hier beenden wir für's Beispiel.
+    exit(0)
+else:
+    seed_x, _ = dataset[180]  # shape (16,256)
+    # Generiere 50 neue Noten
+
+    # custom
+    # one_hot_map = MidiDataset.pitch_to_one_hot()
+    # custom_notes = [57, 60, 53, 62, 55, 58, 52, 50, 62, 58, 60, 57, 55, 53, 52, 50]
+    # seed_x_2 = [one_hot_map[pitch] for pitch in custom_notes]
+
+    generated = generate_notes(model, seed_x, num_notes=100)
+    notes_to_midi(generated, filename="output.midi")
