@@ -8,14 +8,22 @@ import constants
 
 
 def quantize_duration(duration, interval=0.125):
-    if duration >= constants.MAX_NOTE_DURATION:
-        return constants.NUM_OF_DURATION_INTERVALS - 1
-    return int(round(duration / interval))
+    return min(int(round(duration / interval)), 15) # für werte > 1.875
+
+
+def map_velocity_to_value(velocity):
+    velocity_values = [49, 64, 80, 96, 112]
+    if velocity in velocity_values:
+        return velocity_values.index(velocity) # returns the index of the velocity value
+    else:
+        return 2 # 80 most popular velocity value (around 80%)
+
 
 def note_to_one_hot(note):
     one_hot_encoded_note = [0] * constants.MODEL_INPUT_SIZE
     pitch = note['pitch'] # value between 0 - 127, representing the pitch in midi
-    velocity = note['velocity'] # value between 0 - 127, representing the velocity in midi
+    #velocity = note['velocity'] # value between 0 - 127, representing the velocity in midi
+    velocity = map_velocity_to_value(note['velocity'])
     one_hot_encoded_note[pitch] = 1 # first 128 values represent the pitch
     one_hot_encoded_note[constants.NUM_OF_NOTE_VALUES +  velocity] = 1 # next 128 values represent the velocity
 
@@ -51,8 +59,8 @@ class MidiDataset(Dataset):
             # In Sequenzen aufteilen
             # (16 Eingabeschritte) -> 1 Zielschritt
             for i in range(len(one_hot_list) - seq_length):
-                seq_input = one_hot_list[i: i + seq_length]  # 16 x 128
-                seq_target = one_hot_list[i + seq_length]  # 128
+                seq_input = one_hot_list[i: i + seq_length]  # sequence x output_size
+                seq_target = one_hot_list[i + seq_length]  # output size
 
                 self.sequences.append(seq_input)
                 self.targets.append(seq_target)
